@@ -3,4 +3,5 @@
 .cargo
 .vscode
 Cargo.lock
-
+notes/
+slideshow/

@@ -11,7 +11,7 @@ import time
 FRAME_HEADER = 0x77777777
 
 def main():
-    port = serial.Serial('/dev/cu.usbmodem1402', 115200, timeout = 0.1)
+    port = serial.Serial('/dev/cu.usbmodem1302', 115200, timeout = 0.1)
     mesh = pv.read("tcsgunship.obj")
     plotter = pv.Plotter()
 

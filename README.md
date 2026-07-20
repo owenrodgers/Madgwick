@@ -16,3 +16,8 @@ the computed orientation over UART to a small Python program for
 rendering.
 
 <video controls src="madquatter-1.mov" title="Title"></video>
+
+## Notes
+$
+    \int    
+$

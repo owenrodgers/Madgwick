@@ -34,15 +34,16 @@ impl Quaternion {
 
     pub fn normalize(&self) -> Quaternion {
         let norm : f32 = self.norm();
-        match norm {
-            0.0 => Quaternion::new(self.a, self.b, self.c, self.d),
-            _ => Quaternion::new(self.a / norm, self.b / norm, self.c / norm, self.d / norm)
+        if norm == 0.0 {
+            Quaternion::new(self.a, self.b, self.c, self.d)
+        } else {
+            Quaternion::new(self.a / norm, self.b / norm, self.c / norm, self.d / norm)
         }
     }
 
     pub fn eulers(&self) -> (f32, f32, f32) {
-        let yaw : f32 = (2.0 * (self.b * self.c - self.a * self.d))
-            .atan2(1.0 - 2.0 * (self.a * self.a + self.b * self.b));
+        let yaw : f32 = (2.0 * (self.a * self.d + self.b * self.c))
+            .atan2(1.0 - 2.0 * (self.c * self.c + self.d * self.d));
 
         let sin_pitch = 2.0 * (self.a * self.c - self.d * self.b);
         let pitch = sin_pitch.clamp(-1.0, 1.0).asin();
@@ -95,6 +96,19 @@ impl ops::Mul<Quaternion> for f32 {
             self * rhs.b, 
             self * rhs.c, 
             self * rhs.d
+        )
+    }
+}
+
+impl ops::Mul<f32> for Quaternion {
+    type Output = Quaternion;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        Quaternion::new(
+            self.a * rhs, 
+            self.b * rhs, 
+            self.c * rhs, 
+            self.d * rhs
         )
     }
 }
