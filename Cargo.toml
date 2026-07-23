@@ -27,8 +27,10 @@ serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 zerocopy = {version="0.8.47", default-features = false, features=["derive"]}
 libm = "0.2.16"
 lsm303agr = { version = "1.1.0", features = ["async"] }
+nalgebra = { version = "0.35.0", default-features = false, features = ["libm"] }
 
 [dependencies.num-traits]
 version = "0.2"
 default-features = false
 features = ["libm"] 
+

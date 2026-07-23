@@ -4,10 +4,13 @@
 mod quaternion;
 mod madgwick;
 
+use core::f32::consts::PI;
+
 use defmt_rtt as _;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use lsm303agr::{Lsm303agr, MagMode, MagOutputDataRate, interface::I2cInterface, mode::MagContinuous};
 use mpu6050_async::Mpu6050;
+use nalgebra::Vector3;
 use panic_probe as _;
 use postcard::to_slice;
 use static_cell::ConstStaticCell;
@@ -101,6 +104,13 @@ async fn main(spawner: Spawner) {
             }
         }
     }
+    
+    /* 
+    if let Ok(Ok(_)) = mpu.init(&mut Delay).with_timeout(Duration::from_secs(1)).await {
+        spawner.spawn(pubber6(mpu)).unwrap();
+        spawner.spawn(subber(ext_tx)).unwrap()
+    }
+    */
 }
 
 /* 
@@ -119,19 +129,17 @@ async fn pubber9(
             if lsm.mag_status().await.is_ok() {
                 if let Ok(mag) = lsm.magnetic_field().await {
                     mad_marg.filter9(
-                        acc.x - ACC_X_BIAS,   acc.y - ACC_Y_BIAS,   acc.z - ACC_Z_BIAS, 
-                        gyro.x - GYRO_X_BIAS, gyro.y - GYRO_Y_BIAS, gyro.z - GYRO_Z_BIAS, 
+                        Vector3::new(acc.x - ACC_X_BIAS,   acc.y - ACC_Y_BIAS,   acc.z - ACC_Z_BIAS), 
+                        Vector3::new(gyro.x - GYRO_X_BIAS, gyro.y - GYRO_Y_BIAS, gyro.z - GYRO_Z_BIAS), 
 
                         // remove hard iron biases and account for axis misalignment
-                        mag.x_nt() as f32 - MAG_X_BIAS,
-                        mag.y_nt() as f32 - MAG_Y_BIAS,
-                        -mag.z_nt() as f32 - MAG_Z_BIAS
+                        Vector3::new(mag.x_nt() as f32 - MAG_X_BIAS, mag.y_nt() as f32 - MAG_Y_BIAS, -mag.z_nt() as f32 - MAG_Z_BIAS)
                     );
                 }
             }
 
-            let (roll, pitch, yaw) = mad_marg.quat().eulers();
-            let orientation = Orientation{roll, pitch, yaw};
+            let (roll, pitch, yaw) = mad_marg.quat().euler_angles();
+            let orientation = Orientation{roll: roll * 180.0 / PI, pitch : pitch * 180.0 / PI, yaw : yaw * 180.0 / PI};
             MAD_CHAN.send(orientation).await;
         }
         marg_ticka.next().await;
@@ -151,12 +159,12 @@ async fn pubber6(
     loop {
         if let (Ok(acc), Ok(gyro)) = (mpu.get_acc().await, mpu.get_gyro().await) {
             mad_filter.filter6(
-                acc.x - ACC_X_BIAS,   acc.y - ACC_Y_BIAS,   acc.z - ACC_Z_BIAS, 
-                gyro.x - GYRO_X_BIAS, gyro.y - GYRO_Y_BIAS, gyro.z - GYRO_Z_BIAS
+                Vector3::new(acc.x - ACC_X_BIAS,   acc.y - ACC_Y_BIAS,   acc.z - ACC_Z_BIAS), 
+                Vector3::new(gyro.x - GYRO_X_BIAS, gyro.y - GYRO_Y_BIAS, gyro.z - GYRO_Z_BIAS)
             );
 
-            let (roll, pitch, yaw) = mad_filter.quat().eulers();
-            let orientation = Orientation{roll, pitch, yaw};
+            let (roll, pitch, yaw) = mad_filter.quat().euler_angles();
+            let orientation = Orientation{roll: roll * 180.0 / PI, pitch : pitch * 180.0 / PI, yaw : yaw * 180.0 / PI};
             MAD_CHAN.send(orientation).await;
         }
         marg_ticka.next().await;

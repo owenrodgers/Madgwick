@@ -1,113 +1,93 @@
-use crate::quaternion::Quaternion;
+#![allow(dead_code)]
+use nalgebra::{Matrix3x4, Quaternion, RowVector4, UnitQuaternion, Vector3};
 use num_traits::Float;
 
 /*  
     Algortithm spec:
-    https://ahrs.readthedocs.io/en/latest/filters/madgwick.html
+    https://x-io.co.uk/downloads/madgwick_internal_report.pdf
 */
-
 pub trait Madgwick {
-    fn filter6(&mut self, ax : f32, ay : f32, az : f32, gx : f32, gy : f32, gz : f32) -> ();
+    fn filter6(&mut self, 
+        acc : Vector3<f32>,
+        gyro : Vector3<f32>
+    );
     fn filter9(&mut self, 
-        ax : f32, ay : f32, az : f32, 
-        gx : f32, gy : f32, gz : f32,
-        mx : f32, my : f32, mz : f32
-    ) -> ();
-    fn quat(&self) -> Quaternion;
+        acc : Vector3<f32>,
+        gyro : Vector3<f32>,
+        mag : Vector3<f32>
+    );
+    fn quat(&self) -> UnitQuaternion<f32>;
 }
 
 pub struct MadgwickFilter {
     delta_t : f32,
     beta : f32,
     zeta : f32,
-    gyro_error : Quaternion,
-
-    estimate : Quaternion,
+    gyro_error : Quaternion<f32>,
+    estimate : UnitQuaternion<f32>,
 }
 
 impl Madgwick for MadgwickFilter {
     fn filter9(&mut self, 
-        ax : f32, ay : f32, az : f32, 
-        gx : f32, gy : f32, gz : f32,
-        mx : f32, my : f32, mz : f32
-    ) -> ()
-    {
-        let q_est_t_1 = self.estimate.clone();
+        acc : Vector3<f32>,
+        gyro : Vector3<f32>,
+        mag : Vector3<f32>
+    ) {
+        let q_est_t_1 = self.estimate.into_inner();
 
         // normed measurements
-        let a_t = Quaternion::new(0.0, ax, ay, az).normalize();
-        let m_t = Quaternion::new(0.0, mx, my, mz).normalize();
-        let w_t = Quaternion::new(0.0, gx, gy, gz);
+        let m_t = Quaternion::new(0.0, mag.x, mag.y, mag.z).normalize();
+        let w_t = Quaternion::new(0.0, gyro.x, gyro.y, gyro.z);
 
         // compensate for magnetic drift in m_t (group 1)
         // (45) and (46)
         let h_t = q_est_t_1 * m_t * q_est_t_1.conjugate(); // (eq 45)
-        let b_t = Quaternion::new(0.0, (h_t.b * h_t.b + h_t.c * h_t.c).sqrt(), 0.0, h_t.d); // (eq 46)
+        let b_t = Quaternion::new(
+            0.0,
+            (h_t.i * h_t.i + h_t.j * h_t.j).sqrt(),
+            0.0,
+            h_t.k,
+        ); // (eq 46)
 
         // build J + f
         // there are two pieces to J_gb and f_gb, the g part and b part
 
         // b (magnetic) part
         // f_b (equation 29)
-        let f_b : [f32 ; 3] = [
-            2.0 * b_t.b * (0.5 - q_est_t_1.c * q_est_t_1.c - q_est_t_1.d * q_est_t_1.d) + 2.0 * b_t.d * (q_est_t_1.b * q_est_t_1.d - q_est_t_1.a * q_est_t_1.c) - m_t.b,
-            2.0 * b_t.b * (q_est_t_1.b * q_est_t_1.c - q_est_t_1.a * q_est_t_1.d) + 2.0 * b_t.d * (q_est_t_1.a * q_est_t_1.b + q_est_t_1.c * q_est_t_1.d) - m_t.c,
-            2.0 * b_t.b * (q_est_t_1.a * q_est_t_1.c + q_est_t_1.b * q_est_t_1.d) + 2.0 * b_t.d * (0.5 - q_est_t_1.b * q_est_t_1.b - q_est_t_1.c * q_est_t_1.c) - m_t.d
-        ];
-
-        let mut jacobian_b = [[0f32; 4]; 3];
-        jacobian_b[0][0] = -2.0 * b_t.d * q_est_t_1.c;
-        jacobian_b[0][1] = 2.0 * b_t.d * q_est_t_1.d;
-        jacobian_b[0][2] = -4.0 * b_t.b * q_est_t_1.c - 2.0 * b_t.d * q_est_t_1.a;
-        jacobian_b[0][3] = -4.0 * b_t.b * q_est_t_1.d + 2.0 * b_t.d * q_est_t_1.b;
-
-        jacobian_b[1][0] = -2.0 * b_t.b * q_est_t_1.d + 2.0 * b_t.d * q_est_t_1.b;
-        jacobian_b[1][1] = 2.0 * b_t.b * q_est_t_1.c + 2.0 * b_t.d * q_est_t_1.a;
-        jacobian_b[1][2] = 2.0 * b_t.b * q_est_t_1.b + 2.0 * b_t.d * q_est_t_1.d;
-        jacobian_b[1][3] = -2.0 * b_t.b * q_est_t_1.a + 2.0 * b_t.d * q_est_t_1.c;
-
-        jacobian_b[2][0] = 2.0 * b_t.b * q_est_t_1.c;
-        jacobian_b[2][1] = 2.0 * b_t.b * q_est_t_1.d - 4.0 * b_t.d * q_est_t_1.b;
-        jacobian_b[2][2] = 2.0 * b_t.b * q_est_t_1.a - 4.0 * b_t.d * q_est_t_1.c;
-        jacobian_b[2][3] = 2.0 * b_t.b * q_est_t_1.b;
-
-        let mag_grad = Quaternion::new(
-            jacobian_b[0][0] * f_b[0] + jacobian_b[1][0] * f_b[1] + jacobian_b[2][0] * f_b[2], 
-            jacobian_b[0][1] * f_b[0] + jacobian_b[1][1] * f_b[1] + jacobian_b[2][1] * f_b[2], 
-            jacobian_b[0][2] * f_b[0] + jacobian_b[1][2] * f_b[1] + jacobian_b[2][2] * f_b[2], 
-            jacobian_b[0][3] * f_b[0] + jacobian_b[1][3] * f_b[1] + jacobian_b[2][3] * f_b[2]
-        );
-
+        let f_b = Vector3::new(
+            2.0 * b_t.i * (0.5 - q_est_t_1.j * q_est_t_1.j - q_est_t_1.k * q_est_t_1.k)
+                + 2.0 * b_t.k * (q_est_t_1.i * q_est_t_1.k - q_est_t_1.w * q_est_t_1.j),
+            2.0 * b_t.i * (q_est_t_1.i * q_est_t_1.j - q_est_t_1.w * q_est_t_1.k)
+                + 2.0 * b_t.k * (q_est_t_1.w * q_est_t_1.i + q_est_t_1.j * q_est_t_1.k),
+            2.0 * b_t.i * (q_est_t_1.w * q_est_t_1.j + q_est_t_1.i * q_est_t_1.k)
+                + 2.0 * b_t.k * (0.5 - q_est_t_1.i * q_est_t_1.i - q_est_t_1.j * q_est_t_1.j)
+        ) - mag.normalize();
+ 
+        let jacobian_b = Matrix3x4::from_rows(&[
+            RowVector4::new(-2.0 * b_t.k * q_est_t_1.j, 2.0 * b_t.k * q_est_t_1.k, -4.0 * b_t.i * q_est_t_1.j - 2.0 * b_t.k * q_est_t_1.w, -4.0 * b_t.i * q_est_t_1.k + 2.0 * b_t.k * q_est_t_1.i),
+            RowVector4::new(-2.0 * b_t.i * q_est_t_1.k + 2.0 * b_t.k * q_est_t_1.i, 2.0 * b_t.i * q_est_t_1.j + 2.0 * b_t.k * q_est_t_1.w, 2.0 * b_t.i * q_est_t_1.i + 2.0 * b_t.k * q_est_t_1.k, -2.0 * b_t.i * q_est_t_1.w + 2.0 * b_t.k * q_est_t_1.j),
+            RowVector4::new(2.0 * b_t.i * q_est_t_1.j, 2.0 * b_t.i * q_est_t_1.k - 4.0 * b_t.k * q_est_t_1.i, 2.0 * b_t.i * q_est_t_1.w - 4.0 * b_t.k * q_est_t_1.j, 2.0 * b_t.i * q_est_t_1.i)
+        ]);
+ 
+        let p = jacobian_b.transpose() * f_b;
+        let mag_grad = Quaternion::new(p[0], p[1], p[2], p[3]);
+ 
         // f_g (equation 25)
-        let f_g : [f32; 3] = [
-            2.0 * (q_est_t_1.b * q_est_t_1.d - q_est_t_1.a * q_est_t_1.c) - a_t.b,
-            2.0 * (q_est_t_1.a * q_est_t_1.b + q_est_t_1.c * q_est_t_1.d) - a_t.c,
-            2.0 * (0.5 - q_est_t_1.b * q_est_t_1.b - q_est_t_1.c * q_est_t_1.c) - a_t.d,
-        ];
-
-        let mut jacobian_g = [[0f32 ; 4] ; 3];
-        jacobian_g[0][0] = -2.0 * q_est_t_1.c;
-        jacobian_g[0][1] = 2.0 * q_est_t_1.d;
-        jacobian_g[0][2] = -2.0 * q_est_t_1.a;
-        jacobian_g[0][3] = 2.0 * q_est_t_1.b;
-
-        jacobian_g[1][0] = 2.0 * q_est_t_1.b;
-        jacobian_g[1][1] = 2.0 * q_est_t_1.a;
-        jacobian_g[1][2] = 2.0 * q_est_t_1.d;
-        jacobian_g[1][3] = 2.0 * q_est_t_1.c;
-
-        jacobian_g[2][0] = 0.0;
-        jacobian_g[2][1] = -4.0 * q_est_t_1.b;
-        jacobian_g[2][2] = -4.0 * q_est_t_1.c;
-        jacobian_g[2][3] = 0.0;
-
-        let acc_grad = Quaternion::new(
-            jacobian_g[0][0] * f_g[0] + jacobian_g[1][0] * f_g[1] + jacobian_g[2][0] * f_g[2], 
-            jacobian_g[0][1] * f_g[0] + jacobian_g[1][1] * f_g[1] + jacobian_g[2][1] * f_g[2], 
-            jacobian_g[0][2] * f_g[0] + jacobian_g[1][2] * f_g[1] + jacobian_g[2][2] * f_g[2], 
-            jacobian_g[0][3] * f_g[0] + jacobian_g[1][3] * f_g[1] + jacobian_g[2][3] * f_g[2]
-        );
-
+        let f_g = Vector3::new(
+            2.0 * (q_est_t_1.i * q_est_t_1.k - q_est_t_1.w * q_est_t_1.j), 
+            2.0 * (q_est_t_1.w * q_est_t_1.i + q_est_t_1.j * q_est_t_1.k), 
+            2.0 * (0.5 - q_est_t_1.i * q_est_t_1.i - q_est_t_1.j * q_est_t_1.j)
+        ) - acc.normalize();
+ 
+        let jacobian_g = Matrix3x4::from_rows(&[
+            RowVector4::new(-2.0 * q_est_t_1.j, 2.0 * q_est_t_1.k, -2.0 * q_est_t_1.w, 2.0 * q_est_t_1.i),
+            RowVector4::new(2.0 * q_est_t_1.i, 2.0 * q_est_t_1.w, 2.0 * q_est_t_1.k, 2.0 * q_est_t_1.j),
+            RowVector4::new(0.0, -4.0 * q_est_t_1.i, -4.0 * q_est_t_1.j, 0.0)
+        ]);
+ 
+        let p = jacobian_g.transpose() * f_g;
+        let acc_grad = Quaternion::new(p[0], p[1], p[2], p[3]);
+ 
         let grad_f = (mag_grad + acc_grad).normalize();
 
         // (44) says grad f === S E q hat dot epsilon t
@@ -116,52 +96,40 @@ impl Madgwick for MadgwickFilter {
         // (47) (48) and (49)
         self.gyro_error = self.gyro_error + self.zeta * ((2.0 * q_est_t_1.conjugate() * grad_f) * self.delta_t);
         let mut omega_compensated = w_t - self.gyro_error;
-        omega_compensated.a = 0.0;
+        omega_compensated.w = 0.0;
 
         // fuse everything together
-        self.estimate = (q_est_t_1 +
-            (((0.5 * q_est_t_1 * omega_compensated) - (self.beta * grad_f)) * self.delta_t)
-        ).normalize();
+        let q_est_t = q_est_t_1 +
+            (((0.5 * q_est_t_1 * omega_compensated) - (self.beta * grad_f)) * self.delta_t);
+        self.estimate = UnitQuaternion::from_quaternion(q_est_t);
     }
 
-    fn filter6(&mut self, ax : f32, ay : f32, az : f32, gx : f32, gy : f32, gz : f32) -> () {
-        let prev_estimate = self.estimate.clone();
-        let q_w = prev_estimate * (0.5 * Quaternion::new(0.0, gx, gy, gz));
-        let normed_acc = Quaternion::new(0.0, ax, ay, az).normalize();
+    fn filter6(&mut self, 
+        acc : Vector3<f32>,
+        gyro : Vector3<f32>
+    ){
+        let prev_estimate: Quaternion<f32> = self.estimate.into_inner();
+        let q_w = prev_estimate * (0.5 * Quaternion::new(0.0, gyro.x, gyro.y, gyro.z));
 
-        let mut f_g = [0f32 ; 3];
-        f_g[0] = 2.0 * (prev_estimate.b * prev_estimate.d - prev_estimate.a * prev_estimate.c) - normed_acc.b;
-        f_g[1] = 2.0 * (prev_estimate.a * prev_estimate.b + prev_estimate.c * prev_estimate.d) - normed_acc.c;
-        f_g[2] = 2.0 * (0.5 - prev_estimate.b * prev_estimate.b - prev_estimate.c * prev_estimate.c) - normed_acc.d;
-
-        let mut jacobian_g = [[0f32 ; 4] ; 3];
-        jacobian_g[0][0] = -2.0 * prev_estimate.c;
-        jacobian_g[0][1] = 2.0 * prev_estimate.d;
-        jacobian_g[0][2] = -2.0 * prev_estimate.a;
-        jacobian_g[0][3] = 2.0 * prev_estimate.b;
-
-        jacobian_g[1][0] = 2.0 * prev_estimate.b;
-        jacobian_g[1][1] = 2.0 * prev_estimate.a;
-        jacobian_g[1][2] = 2.0 * prev_estimate.d;
-        jacobian_g[1][3] = 2.0 * prev_estimate.c;
-
-        jacobian_g[2][0] = 0.0;
-        jacobian_g[2][1] = -4.0 * prev_estimate.b;
-        jacobian_g[2][2] = -4.0 * prev_estimate.c;
-        jacobian_g[2][3] = 0.0;
-
-        let gradient = Quaternion::new(
-            jacobian_g[0][0] * f_g[0] + jacobian_g[1][0] * f_g[1] + jacobian_g[2][0] * f_g[2], 
-            jacobian_g[0][1] * f_g[0] + jacobian_g[1][1] * f_g[1] + jacobian_g[2][1] * f_g[2], 
-            jacobian_g[0][2] * f_g[0] + jacobian_g[1][2] * f_g[1] + jacobian_g[2][2] * f_g[2], 
-            jacobian_g[0][3] * f_g[0] + jacobian_g[1][3] * f_g[1] + jacobian_g[2][3] * f_g[2]
-        ).normalize();
-        
+        let f_g = Vector3::new(
+            2.0 * (prev_estimate.i * prev_estimate.k - prev_estimate.w * prev_estimate.j), 
+            2.0 * (prev_estimate.w * prev_estimate.i + prev_estimate.j * prev_estimate.k), 
+            2.0 * (0.5 - prev_estimate.i * prev_estimate.i - prev_estimate.j * prev_estimate.j)
+        ) - acc.normalize();
+ 
+        let jacobian_g = Matrix3x4::from_rows(&[
+            RowVector4::new(-2.0 * prev_estimate.j, 2.0 * prev_estimate.k, -2.0 * prev_estimate.w, 2.0 * prev_estimate.i),
+            RowVector4::new(2.0 * prev_estimate.i, 2.0 * prev_estimate.w, 2.0 * prev_estimate.k, 2.0 * prev_estimate.j),
+            RowVector4::new(0.0, -4.0 * prev_estimate.i, -4.0 * prev_estimate.j, 0.0)
+        ]);
+        let gradient = Quaternion::from(jacobian_g.transpose() * f_g).normalize();
+ 
         let q_est_dot = q_w - (self.beta * gradient);
-        self.estimate = (prev_estimate + (self.delta_t * q_est_dot)).normalize();
+        let updated = prev_estimate + (self.delta_t * q_est_dot);
+        self.estimate = UnitQuaternion::from_quaternion(updated);
     }
 
-    fn quat(&self) -> Quaternion {
+    fn quat(&self) -> UnitQuaternion<f32> {
         self.estimate
     }
 }
@@ -169,14 +137,14 @@ impl Madgwick for MadgwickFilter {
 impl MadgwickFilter {
     pub fn new_6dof(delta_t : f32, beta : f32) -> MadgwickFilter {
         MadgwickFilter{delta_t, beta,
-            estimate : Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            gyro_error : Quaternion { a: 0.0, b: 0.0, c: 0.0, d: 0.0},
+            estimate : UnitQuaternion::new_normalize(Quaternion::new(1.0, 0.0, 0.0, 0.0)),
+            gyro_error : Quaternion::new(0.0, 0.0, 0.0, 0.0),
             zeta : 0.0,}
     }
 
     pub fn new_9dof(delta_t : f32, beta : f32, zeta : f32) -> MadgwickFilter {
         MadgwickFilter{delta_t, beta, zeta,
-            gyro_error : Quaternion { a: 0.0, b: 0.0, c: 0.0, d: 0.0},
-            estimate : Quaternion::new(1.0, 0.0, 0.0, 0.0)}
+            estimate : UnitQuaternion::new_normalize(Quaternion::new(1.0, 0.0, 0.0, 0.0)),
+            gyro_error : Quaternion::new(0.0, 0.0, 0.0, 0.0)}
     }
 }
