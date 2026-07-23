@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 
-mod quaternion;
 mod madgwick;
 
 use core::f32::consts::PI;
